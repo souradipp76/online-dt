@@ -8,7 +8,8 @@ LICENSE.md file in the root directory of this source tree.
 from datetime import datetime
 import os
 import utils
-
+import wandb
+import random
 
 class Logger:
     def __init__(self, variant):
@@ -16,6 +17,20 @@ class Logger:
         self.log_path = self.create_log_path(variant)
         utils.mkdir(self.log_path)
         print(f"Experiment log path: {self.log_path}")
+
+        self.log_to_wandb = variant.get('log_to_wandb', False)
+        env_name = variant['env']
+        exp_prefix = 'gym-experiment'
+        group_name = f'{exp_prefix}-{env_name}'
+        exp_name = f'{group_name}-{random.randint(int(1e5), int(1e6) - 1)}'
+
+        if self.log_to_wandb:
+            wandb.init(
+                name=exp_name,
+                group=group_name,
+                project='online-dt',
+                config=variant
+            )
 
     def log_metrics(self, outputs, iter_num, total_transitions_sampled, writer):
         print("=" * 80)
@@ -30,6 +45,19 @@ class Logger:
                         v,
                         total_transitions_sampled,
                     )
+
+        if self.log_to_wandb:
+            log_dict = {}
+            for k, v in outputs.items():
+                log_dict[k] = v
+                if k == "evaluation/return_mean_gm":
+                    # define our custom x axis metric
+                    wandb.define_metric("evaluation/samples")
+                    # set all other train/ metrics to use this step
+                    wandb.define_metric("evaluation/return_vs_samples", step_metric="evaluation/samples")
+                    log_dict["evaluation/return_vs_samples"] = v
+                    log_dict["evaluation/samples"] = total_transitions_sampled
+            wandb.log(log_dict)        
 
     def create_log_path(self, variant):
         now = datetime.now().strftime("%Y.%m.%d/%H%M%S")

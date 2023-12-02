@@ -5,7 +5,8 @@ This source code is licensed under the CC BY-NC license found in the
 LICENSE.md file in the root directory of this source tree.
 """
 
-from torch.utils.tensorboard import SummaryWriter
+# from torch.utils.tensorboard import SummaryWriter
+
 import argparse
 import pickle
 import random
@@ -14,11 +15,12 @@ import gym
 import d4rl
 import torch
 import numpy as np
+import wandb
 
 import utils
 from replay_buffer import ReplayBuffer
 from lamb import Lamb
-from stable_baselines3.common.vec_env import SubprocVecEnv
+from stable_baselines3.common.vec_env import DummyVecEnv
 from pathlib import Path
 from data import create_dataloader
 from decision_transformer.models.decision_transformer import DecisionTransformer
@@ -56,6 +58,7 @@ class Experiment:
             n_inner=4 * variant["embed_dim"],
             activation_function=variant["activation_function"],
             n_positions=1024,
+            n_ctx=1024,
             resid_pdrop=variant["dropout"],
             attn_pdrop=variant["dropout"],
             stochastic_policy=True,
@@ -144,7 +147,7 @@ class Experiment:
 
     def _load_dataset(self, env_name):
 
-        dataset_path = f"./data/{env_name}.pkl"
+        dataset_path = f"/content/drive/MyDrive/Purdue/ECE595RL/project/decision-transformer/gym/data/{env_name}.pkl"
         with open(dataset_path, "rb") as f:
             trajectories = pickle.load(f)
 
@@ -245,9 +248,9 @@ class Experiment:
             device=self.device,
         )
 
-        writer = (
-            SummaryWriter(self.logger.log_path) if self.variant["log_to_tb"] else None
-        )
+        # writer = (
+        #     SummaryWriter(self.logger.log_path) if self.variant["log_to_tb"] else None
+        # )
         while self.pretrain_iter < self.variant["max_pretrain_iters"]:
             # in every iteration, prepare the data loader
             dataloader = create_dataloader(
@@ -275,7 +278,7 @@ class Experiment:
                 outputs,
                 iter_num=self.pretrain_iter,
                 total_transitions_sampled=self.total_transitions_sampled,
-                writer=writer,
+                writer=None,
             )
 
             self._save_model(
@@ -321,9 +324,9 @@ class Experiment:
                 reward_scale=self.reward_scale,
             )
         ]
-        writer = (
-            SummaryWriter(self.logger.log_path) if self.variant["log_to_tb"] else None
-        )
+        # writer = (
+        #     SummaryWriter(self.logger.log_path) if self.variant["log_to_tb"] else None
+        # )
         while self.online_iter < self.variant["max_online_iters"]:
 
             outputs = {}
@@ -373,7 +376,7 @@ class Experiment:
                 outputs,
                 iter_num=self.pretrain_iter + self.online_iter,
                 total_transitions_sampled=self.total_transitions_sampled,
-                writer=writer,
+                writer=None,
             )
 
             self._save_model(
@@ -428,7 +431,7 @@ class Experiment:
                 return env
 
             return make_env_fn
-
+        
         print("\n\nMaking Eval Env.....")
         env_name = self.variant["env"]
         if "antmaze" in env_name:
@@ -438,7 +441,7 @@ class Experiment:
             print(f"Generated the fixed target goal: {target_goal}")
         else:
             target_goal = None
-        eval_envs = SubprocVecEnv(
+        eval_envs = DummyVecEnv(
             [
                 get_env_builder(i, env_name=env_name, target_goal=target_goal)
                 for i in range(self.variant["num_eval_episodes"])
@@ -451,7 +454,7 @@ class Experiment:
 
         if self.variant["max_online_iters"]:
             print("\n\nMaking Online Env.....")
-            online_envs = SubprocVecEnv(
+            online_envs = DummyVecEnv(
                 [
                     get_env_builder(i + 100, env_name=env_name, target_goal=target_goal)
                     for i in range(self.variant["num_online_rollouts"])
@@ -504,7 +507,8 @@ if __name__ == "__main__":
 
     # environment options
     parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--log_to_tb", "-w", type=bool, default=True)
+    # parser.add_argument("--log_to_tb", "-w", type=bool, default=False)
+    parser.add_argument("--log_to_wandb", "-w", type=bool, default=False)
     parser.add_argument("--save_dir", type=str, default="./exp")
     parser.add_argument("--exp_name", type=str, default="default")
 
