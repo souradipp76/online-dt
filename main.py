@@ -12,7 +12,6 @@ import pickle
 import random
 import time
 import gym
-import d4rl
 import torch
 import numpy as np
 import wandb
@@ -453,10 +452,14 @@ class Experiment:
 
         def get_env_builder(seed, env_name, target_goal=None):
             def make_env_fn():
-                import d4rl
-                import d4rl_atari
-
-                env = gym.make(env_name)
+                
+                if self.variant["atari"]:
+                    import d4rl_atari
+                    import gym 
+                    env = gym.make(env_name)
+                else:
+                    import d4rl
+                    env = gym.make(env_name)
                 env.seed(seed)
                 if hasattr(env.env, "wrapped_env"):
                     env.env.wrapped_env.seed(seed)
