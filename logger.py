@@ -51,9 +51,7 @@ class Logger:
             for k, v in outputs.items():
                 log_dict[k] = v
                 if k == "evaluation/return_mean_gm":
-                    # define our custom x axis metric
                     wandb.define_metric("evaluation/samples")
-                    # set all other train/ metrics to use this step
                     wandb.define_metric("evaluation/return_vs_samples", step_metric="evaluation/samples")
                     log_dict["evaluation/return_vs_samples"] = v
                     log_dict["evaluation/samples"] = total_transitions_sampled

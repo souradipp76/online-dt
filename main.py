@@ -36,7 +36,7 @@ class Experiment:
 
         self.state_dim, self.act_dim, self.action_range = self._get_env_spec(variant)
         self.offline_trajs, self.state_mean, self.state_std = self._load_dataset(
-            variant["env"]
+            variant["env"], variant["dataset_path_prefix"], variant["atari"]
         )
         # initialize by offline trajs
         self.replay_buffer = ReplayBuffer(variant["replay_size"], self.offline_trajs)
@@ -127,9 +127,9 @@ class Experiment:
                 torch.save(to_save, f)
             print(f"Model saved at {path_prefix}/pretrain_model.pt")
 
-    def _load_model(self, path_prefix):
-        if Path(f"{path_prefix}/model.pt").exists():
-            with open(f"{path_prefix}/model.pt", "rb") as f:
+    def _load_model(self, path_prefix, model_file):
+        if Path(f"{path_prefix}/{model_file}").exists():
+            with open(f"{path_prefix}/{model_file}", "rb") as f:
                 checkpoint = torch.load(f)
             self.model.load_state_dict(checkpoint["model_state_dict"])
             self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
@@ -145,11 +145,48 @@ class Experiment:
             torch.set_rng_state(checkpoint["pytorch"])
             print(f"Model loaded at {path_prefix}/model.pt")
 
-    def _load_dataset(self, env_name):
+    def _load_dataset(self, env_name, dataset_path_prefix, env_atari = False):
+        
+        if env_atari:
+            import d4rl_atari
+            import gym
 
-        dataset_path = f"/content/drive/MyDrive/Purdue/ECE595RL/project/decision-transformer/gym/data/{env_name}.pkl"
-        with open(dataset_path, "rb") as f:
-            trajectories = pickle.load(f)
+            env = gym.make(env_name, stack=True) # -v{0, 1, 2, 3, 4} for datasets with the other random seeds
+
+            # dataset will be automatically downloaded into ~/.d4rl/datasets/[GAME]/[INDEX]/[EPOCH]
+            dataset = env.get_dataset()
+            print(len(dataset['observations']))
+            print(len(dataset['actions']))
+            print(len(dataset['rewards']))
+            print(len(dataset['terminals']))
+            print(dataset['observations'][0].shape)
+
+            num_samples = len(dataset['observations'])
+            obss = dataset['observations'][:num_samples]
+            terminals = dataset['terminals'][:num_samples]
+            actions = dataset['actions'][:num_samples]
+            stepwise_returns = dataset['rewards'][:num_samples]
+            done_idxs = []
+            for i, flag in enumerate(terminals):
+                if flag == True:
+                    done_idxs.append(i)
+            
+            print(f"Number of trajectories: {len(done_idxs)}")
+
+            # -- get trajectories
+            start_index = 0
+            for i in done_idxs:
+                path = {}
+                path["observations"] = obss[start_index:i]
+                path["rewards"] = stepwise_returns[start_index:i]
+                path['actions'] = actions[start_index:i]
+                path['terminals'] = terminals[start_index:i]
+                start_index = i
+                trajectories.append(path)
+        else:
+            dataset_path = f"{dataset_path_prefix}/{env_name}.pkl"
+            with open(dataset_path, "rb") as f:
+                trajectories = pickle.load(f)
 
         states, traj_lens, returns = [], [], []
         for path in trajectories:
@@ -304,6 +341,9 @@ class Experiment:
 
         print("\n\n\n*** Online Finetuning ***")
 
+        if self.variant["ckpt_path_prefix"]:
+            self._load_model(self.variant["ckpt_path_prefix"], self.variant["model_ckpt"])
+
         trainer = SequenceTrainer(
             model=self.model,
             optimizer=self.optimizer,
@@ -391,6 +431,7 @@ class Experiment:
         utils.set_seed_everywhere(args.seed)
 
         import d4rl
+        import d4rl_atari
 
         def loss_fn(
             a_hat_dist,
@@ -413,6 +454,7 @@ class Experiment:
         def get_env_builder(seed, env_name, target_goal=None):
             def make_env_fn():
                 import d4rl
+                import d4rl_atari
 
                 env = gym.make(env_name)
                 env.seed(seed)
@@ -470,7 +512,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=10)
     parser.add_argument("--env", type=str, default="hopper-medium-v2")
+    parser.add_argument("--atari", type=bool, default=False)
 
+    # dataset options
+    parser.add_argument("--dataset_path_prefix", type=str, default="./data")
+    
     # model options
     parser.add_argument("--K", type=int, default=20)
     parser.add_argument("--embed_dim", type=int, default=512)
@@ -498,6 +544,8 @@ if __name__ == "__main__":
     parser.add_argument("--num_updates_per_pretrain_iter", type=int, default=5000)
 
     # finetuning options
+    parser.add_argument("--model_ckpt", type=str, default="pretrain_model.pt")
+    parser.add_argument("--ckpt_path_prefix", type=str, default=".")
     parser.add_argument("--max_online_iters", type=int, default=1500)
     parser.add_argument("--online_rtg", type=int, default=7200)
     parser.add_argument("--num_online_rollouts", type=int, default=1)
