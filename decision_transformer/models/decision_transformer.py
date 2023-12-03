@@ -144,10 +144,11 @@ class DecisionTransformer(TrajectoryModel):
         stochastic_policy=False,
         init_temperature=0.1,
         target_entropy=None,
+        atari=False,
         **kwargs
     ):
         super().__init__(state_dim, act_dim, max_length=max_length)
-
+        self.atari = atari
         self.hidden_size = hidden_size
         config = transformers.GPT2Config(
             vocab_size=1,  # doesn't matter -- we don't use the vocab
@@ -163,7 +164,15 @@ class DecisionTransformer(TrajectoryModel):
         if ordering:
             self.embed_ordering = nn.Embedding(max_ep_len, hidden_size)
         self.embed_return = torch.nn.Linear(1, hidden_size)
-        self.embed_state = torch.nn.Linear(self.state_dim, hidden_size)
+
+        if self.atari:
+            self.embed_state = nn.Sequential(nn.Conv2d(4, 32, 8, stride=4, padding=0), nn.ReLU(),
+                                 nn.Conv2d(32, 64, 4, stride=2, padding=0), nn.ReLU(),
+                                 nn.Conv2d(64, 64, 3, stride=1, padding=0), nn.ReLU(),
+                                 nn.Flatten(), nn.Linear(3136, hidden_size), nn.Tanh())
+        else:
+            self.embed_state = torch.nn.Linear(self.state_dim, hidden_size)
+
         self.embed_action = torch.nn.Linear(self.act_dim, hidden_size)
 
         self.embed_ln = nn.LayerNorm(hidden_size)
@@ -260,6 +269,8 @@ class DecisionTransformer(TrajectoryModel):
         return_preds = self.predict_return(x[:, 2])
         # predict next state given state and action
         state_preds = self.predict_state(x[:, 2])
+        if self.atari:
+            state_preds = state_preds.reshape(-1, 4, 84, 84)
         # predict next action given state
         action_preds = self.predict_action(x[:, 1])
 
@@ -270,7 +281,10 @@ class DecisionTransformer(TrajectoryModel):
     ):
         # we don't care about the past rewards in this model
         # tensor shape: batch_size, seq_length, variable_dim
-        states = states.reshape(num_envs, -1, self.state_dim)
+        if self.atari:
+            states = states.reshape(num_envs, -1, 4, 84, 84)
+        else:
+            states = states.reshape(num_envs, -1, self.state_dim)
         actions = actions.reshape(num_envs, -1, self.act_dim)
         returns_to_go = returns_to_go.reshape(num_envs, -1, 1)
 
@@ -301,20 +315,36 @@ class DecisionTransformer(TrajectoryModel):
             ).reshape(1, -1)
             padding_mask = padding_mask.repeat((num_envs, 1))
 
-            states = torch.cat(
-                [
-                    torch.zeros(
-                        (
-                            states.shape[0],
-                            self.max_length - states.shape[1],
-                            self.state_dim,
+            if self.atari:
+                states = torch.cat(
+                    [
+                        torch.zeros(
+                            (
+                                states.shape[0],
+                                self.max_length - states.shape[1],
+                                4, 84, 84
+                            ),
+                            device=states.device,
                         ),
-                        device=states.device,
-                    ),
-                    states,
-                ],
-                dim=1,
-            ).to(dtype=torch.float32)
+                        states,
+                    ],
+                    dim=1,
+                ).to(dtype=torch.float32)
+            else:
+                states = torch.cat(
+                    [
+                        torch.zeros(
+                            (
+                                states.shape[0],
+                                self.max_length - states.shape[1],
+                                self.state_dim,
+                            ),
+                            device=states.device,
+                        ),
+                        states,
+                    ],
+                    dim=1,
+                ).to(dtype=torch.float32)
             actions = torch.cat(
                 [
                     torch.zeros(
