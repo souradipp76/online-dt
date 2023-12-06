@@ -71,7 +71,7 @@ class TransformSamplingSubTraj:
     def __call__(self, traj):
         si = random.randint(0, traj["rewards"].shape[0] - 1)
 
-        # get sequences from dataset
+        # get sequences from dataset   
         ss = traj["observations"][si : si + self.max_len].reshape(-1, self.state_dim)
         aa = traj["actions"][si : si + self.max_len].reshape(-1, self.act_dim)
         rr = traj["rewards"][si : si + self.max_len].reshape(-1, 1)

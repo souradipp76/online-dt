@@ -214,8 +214,9 @@ class DecisionTransformer(TrajectoryModel):
         ordering,
         padding_mask=None,
     ):
-
         batch_size, seq_length = states.shape[0], states.shape[1]
+        if self.atari:
+            states = states.reshape(-1, 4, 84, 84).type(torch.float32).contiguous()
 
         if padding_mask is None:
             # attention mask for GPT: 1 if can be attended to, 0 if not
@@ -225,6 +226,9 @@ class DecisionTransformer(TrajectoryModel):
         state_embeddings = self.embed_state(states)
         action_embeddings = self.embed_action(actions)
         returns_embeddings = self.embed_return(returns_to_go)
+
+        if self.atari:
+            state_embeddings = state_embeddings.reshape(batch_size, seq_length, self.hidden_size)
 
         if self.ordering:
             order_embeddings = self.embed_ordering(timesteps)
@@ -269,8 +273,6 @@ class DecisionTransformer(TrajectoryModel):
         return_preds = self.predict_return(x[:, 2])
         # predict next state given state and action
         state_preds = self.predict_state(x[:, 2])
-        if self.atari:
-            state_preds = state_preds.reshape(-1, 4, 84, 84)
         # predict next action given state
         action_preds = self.predict_action(x[:, 1])
 
@@ -281,10 +283,7 @@ class DecisionTransformer(TrajectoryModel):
     ):
         # we don't care about the past rewards in this model
         # tensor shape: batch_size, seq_length, variable_dim
-        if self.atari:
-            states = states.reshape(num_envs, -1, 4, 84, 84)
-        else:
-            states = states.reshape(num_envs, -1, self.state_dim)
+        states = states.reshape(num_envs, -1, self.state_dim)
         actions = actions.reshape(num_envs, -1, self.act_dim)
         returns_to_go = returns_to_go.reshape(num_envs, -1, 1)
 
@@ -315,36 +314,20 @@ class DecisionTransformer(TrajectoryModel):
             ).reshape(1, -1)
             padding_mask = padding_mask.repeat((num_envs, 1))
 
-            if self.atari:
-                states = torch.cat(
-                    [
-                        torch.zeros(
-                            (
-                                states.shape[0],
-                                self.max_length - states.shape[1],
-                                4, 84, 84
-                            ),
-                            device=states.device,
+            states = torch.cat(
+                [
+                    torch.zeros(
+                        (
+                            states.shape[0],
+                            self.max_length - states.shape[1],
+                            self.state_dim,
                         ),
-                        states,
-                    ],
-                    dim=1,
-                ).to(dtype=torch.float32)
-            else:
-                states = torch.cat(
-                    [
-                        torch.zeros(
-                            (
-                                states.shape[0],
-                                self.max_length - states.shape[1],
-                                self.state_dim,
-                            ),
-                            device=states.device,
-                        ),
-                        states,
-                    ],
-                    dim=1,
-                ).to(dtype=torch.float32)
+                        device=states.device,
+                    ),
+                    states,
+                ],
+                dim=1,
+            ).to(dtype=torch.float32)
             actions = torch.cat(
                 [
                     torch.zeros(

@@ -16,10 +16,17 @@ import torch
 import numpy as np
 import wandb
 
+import atari_py
+from collections import deque
+import cv2
+
 import utils
 from replay_buffer import ReplayBuffer
 from lamb import Lamb
 from stable_baselines3.common.vec_env import DummyVecEnv
+from stable_baselines3.common.atari_wrappers import AtariWrapper, WarpFrame
+from gym.wrappers import AtariPreprocessing, TransformReward, FrameStack, frame_stack
+from stable_baselines3.common.env_checker import check_env
 from pathlib import Path
 from data import create_dataloader
 from decision_transformer.models.decision_transformer import DecisionTransformer
@@ -64,6 +71,7 @@ class Experiment:
             ordering=variant["ordering"],
             init_temperature=variant["init_temperature"],
             target_entropy=self.target_entropy,
+            atari=variant["atari"],
         ).to(device=self.device)
 
         self.optimizer = Lamb(
@@ -88,18 +96,32 @@ class Experiment:
         self.online_iter = 0
         self.total_transitions_sampled = 0
         self.variant = variant
-        self.reward_scale = 1.0 if "antmaze" in variant["env"] else 0.001
+        self.reward_scale = 1.0 if ("antmaze" in variant["env"]) or variant["atari"] else 0.001
         self.logger = Logger(variant)
 
     def _get_env_spec(self, variant):
-        env = gym.make(variant["env"])
-        state_dim = env.observation_space.shape[0]
-        act_dim = env.action_space.shape[0]
-        action_range = [
-            float(env.action_space.low.min()) + 1e-6,
-            float(env.action_space.high.max()) - 1e-6,
-        ]
-        env.close()
+        if variant["atari"]:
+            import d4rl_atari
+            env = gym.make(variant["env"], stack = True)
+            state_dim = 4*84*84
+            print(env.observation_space.shape)
+            print(env.action_space, env.action_space.n)
+            act_dim = env.action_space.n
+            action_range = [
+                1e-6,
+                1 - 1e-6,
+            ]
+            env.close()
+        else:
+            import d4rl
+            env = gym.make(variant["env"])
+            state_dim = env.observation_space.shape[0]
+            act_dim = env.action_space.shape[0]
+            action_range = [
+                float(env.action_space.low.min()) + 1e-6,
+                float(env.action_space.high.max()) - 1e-6,
+            ]
+            env.close()
         return state_dim, act_dim, action_range
 
     def _save_model(self, path_prefix, is_pretrain_model=False):
@@ -144,60 +166,72 @@ class Experiment:
             torch.set_rng_state(checkpoint["pytorch"])
             print(f"Model loaded at {path_prefix}/model.pt")
 
-    def _load_dataset(self, env_name, dataset_path_prefix, env_atari = False):
+    def _load_dataset(self, env_name, dataset_path_prefix, atari = False):
         
-        if env_atari:
+        if atari:
             import d4rl_atari
             import gym
 
-            env = gym.make(env_name, stack=True) # -v{0, 1, 2, 3, 4} for datasets with the other random seeds
+            env = gym.make(env_name, stack = True) # -v{0, 1, 2, 3, 4} for datasets with the other random seeds
 
             # dataset will be automatically downloaded into ~/.d4rl/datasets/[GAME]/[INDEX]/[EPOCH]
             dataset = env.get_dataset()
             print(len(dataset['observations']))
-            print(len(dataset['actions']))
-            print(len(dataset['rewards']))
-            print(len(dataset['terminals']))
             print(dataset['observations'][0].shape)
 
-            num_samples = len(dataset['observations'])
-            obss = dataset['observations'][:num_samples]
-            terminals = dataset['terminals'][:num_samples]
-            actions = dataset['actions'][:num_samples]
-            stepwise_returns = dataset['rewards'][:num_samples]
+            terminals = dataset['terminals']
             done_idxs = []
             for i, flag in enumerate(terminals):
                 if flag == True:
                     done_idxs.append(i)
             
+            obss = np.array(dataset['observations'])
+            terminals = np.array(dataset['terminals'])
+            actions = np.array(dataset['actions'])
+            rewards = np.array(dataset['rewards'])
+
+            # done_idxs = done_idxs[:200]
+            # num_samples = done_idxs[-1]+1
+            # obss = np.array(dataset['observations'][:num_samples])
+            # terminals = np.array(dataset['terminals'][:num_samples])
+            # actions = np.array(dataset['actions'][:num_samples])
+            # rewards = np.array(dataset['rewards'][:num_samples])
             print(f"Number of trajectories: {len(done_idxs)}")
 
             # -- get trajectories
             start_index = 0
-            for i in done_idxs:
-                path = {}
-                path["observations"] = obss[start_index:i]
-                path["rewards"] = stepwise_returns[start_index:i]
-                path['actions'] = actions[start_index:i]
-                path['terminals'] = terminals[start_index:i]
-                start_index = i
-                trajectories.append(path)
+            traj_lens, returns = [], []
+            trajectories = [{} for _ in range(len(done_idxs))]
+            for idx, i in enumerate(done_idxs):
+                trajectories[idx]['observations'] = obss[start_index:i+1].reshape(-1, self.state_dim)
+                trajectories[idx]['actions'] = np.eye(self.act_dim)[actions[start_index:i+1].reshape(-1)]
+                trajectories[idx]['rewards'] = rewards[start_index:i+1].reshape(-1, 1)
+                trajectories[idx]['terminals'] = terminals[start_index:i+1]
+                traj_lens.append(i+1-start_index)
+                returns.append(trajectories[idx]['rewards'].sum())
+                start_index = i+1  
+            traj_lens, returns = np.array(traj_lens), np.array(returns)
+
+            # used for input normalization
+            state_mean, state_std = np.zeros(self.state_dim), 255.*np.ones(self.state_dim)
+            num_timesteps = sum(traj_lens)
+
         else:
             dataset_path = f"{dataset_path_prefix}/{env_name}.pkl"
             with open(dataset_path, "rb") as f:
                 trajectories = pickle.load(f)
 
-        states, traj_lens, returns = [], [], []
-        for path in trajectories:
-            states.append(path["observations"])
-            traj_lens.append(len(path["observations"]))
-            returns.append(path["rewards"].sum())
-        traj_lens, returns = np.array(traj_lens), np.array(returns)
+            states, traj_lens, returns = [], [], []
+            for path in trajectories:
+                states.append(path["observations"])
+                traj_lens.append(len(path["observations"]))
+                returns.append(path["rewards"].sum())
+            traj_lens, returns = np.array(traj_lens), np.array(returns)
 
-        # used for input normalization
-        states = np.concatenate(states, axis=0)
-        state_mean, state_std = np.mean(states, axis=0), np.std(states, axis=0) + 1e-6
-        num_timesteps = sum(traj_lens)
+            # used for input normalization
+            states = np.concatenate(states, axis=0)
+            state_mean, state_std = np.mean(states, axis=0), np.std(states, axis=0) + 1e-6
+            num_timesteps = sum(traj_lens)
 
         print("=" * 50)
         print(f"Starting new experiment: {env_name}")
@@ -273,6 +307,7 @@ class Experiment:
                 device=self.device,
                 use_mean=True,
                 reward_scale=self.reward_scale,
+                atari=self.variant["atari"],
             )
         ]
 
@@ -361,6 +396,7 @@ class Experiment:
                 device=self.device,
                 use_mean=True,
                 reward_scale=self.reward_scale,
+                atari=self.variant["atari"],
             )
         ]
         # writer = (
@@ -429,9 +465,6 @@ class Experiment:
 
         utils.set_seed_everywhere(args.seed)
 
-        import d4rl
-        import d4rl_atari
-
         def loss_fn(
             a_hat_dist,
             a,
@@ -451,24 +484,24 @@ class Experiment:
             )
 
         def get_env_builder(seed, env_name, target_goal=None):
+
             def make_env_fn():
-                
                 if self.variant["atari"]:
-                    import d4rl_atari
-                    import gym 
-                    env = gym.make(env_name)
+                    env_info = env_name.split('-')
+                    env = AtariEnv(env_info[0].capitalize(), stack=True, 
+                        sticky_action=(env_info[-1][-1]==0))
                 else:
                     import d4rl
                     env = gym.make(env_name)
-                env.seed(seed)
-                if hasattr(env.env, "wrapped_env"):
-                    env.env.wrapped_env.seed(seed)
-                elif hasattr(env.env, "seed"):
-                    env.env.seed(seed)
-                else:
-                    pass
-                env.action_space.seed(seed)
-                env.observation_space.seed(seed)
+                    env.seed(seed)
+                    if hasattr(env.env, "wrapped_env"):
+                        env.env.wrapped_env.seed(seed)
+                    elif hasattr(env.env, "seed"):
+                        env.env.seed(seed)
+                    else:
+                        pass
+                    env.action_space.seed(seed)
+                    env.observation_space.seed(seed)
 
                 if target_goal:
                     env.set_target_goal(target_goal)
@@ -510,6 +543,48 @@ class Experiment:
 
         eval_envs.close()
 
+
+class AtariEnv(gym.Env):
+    def __init__(self, game,
+                 stack=False,
+                 sticky_action=False,
+                 clip_reward=False,
+                 terminal_on_life_loss=False,
+                 **kwargs):
+        # set action_probability=0.25 if sticky_action=True
+        env_id = '{}NoFrameskip-v{}'.format(game, 0 if sticky_action else 4)
+
+        # use official atari wrapper
+        params = {}
+        if "render_mode" in kwargs:
+            params["render_mode"] = kwargs["render_mode"]
+        env = AtariPreprocessing(gym.make(env_id, **params),
+                    terminal_on_life_loss=terminal_on_life_loss)
+
+        if stack:
+            env = FrameStack(env, num_stack=4)
+
+        if clip_reward:
+            env = TransformReward(env, lambda r: np.clip(r, -1.0, 1.0))
+
+        self._env = env
+
+        self.observation_space = env.observation_space
+        self.action_space = env.action_space
+
+    def step(self, action):
+        step_output = self._env.step(action)
+        return step_output[0], step_output[1], step_output[2], step_output[4]
+
+    def reset(self, *args, **kwargs):
+        return self._env.reset(*args, **kwargs)[0]
+
+    def render(self, *args, **kwargs):
+        return self._env.render(*args, **kwargs)
+
+    @property
+    def render_mode(self):
+        return self._env.render_mode
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

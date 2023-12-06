@@ -37,11 +37,12 @@ class SequenceTrainer:
         train_start = time.time()
 
         self.model.train()
-        for _, trajs in enumerate(dataloader):
+        for batch_idx, trajs in enumerate(dataloader):
             loss, nll, entropy = self.train_step_stochastic(loss_fn, trajs)
             losses.append(loss)
             nlls.append(nll)
             entropies.append(entropy)
+            print(f"Train Iteration: {batch_idx}/{len(dataloader)}, Loss: {loss}")
 
         logs["time/training"] = time.time() - train_start
         logs["training/train_loss_mean"] = np.mean(losses)
