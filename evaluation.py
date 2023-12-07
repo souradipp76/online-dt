@@ -138,7 +138,7 @@ def vec_evaluate_episode_rtg(
         if use_mean:
             action = action_dist.mean.reshape(num_envs, -1, act_dim)[:, -1]
         action = action.clamp(*model.action_range)
-
+        
         if atari:
             d_action = torch.argmax(action, axis=-1)
             state, reward, done, _ = vec_env.step(d_action.detach().cpu().numpy())

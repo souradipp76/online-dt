@@ -185,8 +185,8 @@ class Experiment:
                 if flag == True:
                     done_idxs.append(i)
 
-            done_idxs = done_idxs[:200]
-            num_samples = done_idxs[-1]+1 #len(dataset['observations'])
+            # done_idxs = done_idxs[:20]
+            num_samples = len(dataset['observations'])
             obss = dataset['observations'][:num_samples]
             terminals = dataset['terminals'][:num_samples]
             actions = dataset['actions'][:num_samples]
@@ -279,6 +279,7 @@ class Experiment:
                 state_std=self.state_std,
                 device=self.device,
                 use_mean=False,
+                atari=self.variant["atari"],
             )
 
         self.replay_buffer.add_new_trajs(trajs)
