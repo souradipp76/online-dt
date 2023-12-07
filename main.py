@@ -179,36 +179,33 @@ class Experiment:
             print(len(dataset['observations']))
             print(dataset['observations'][0].shape)
 
-            terminals = dataset['terminals']
             done_idxs = []
+            terminals = dataset['terminals']
             for i, flag in enumerate(terminals):
                 if flag == True:
                     done_idxs.append(i)
-            
-            obss = np.array(dataset['observations'])
-            terminals = np.array(dataset['terminals'])
-            actions = np.array(dataset['actions'])
-            rewards = np.array(dataset['rewards'])
 
-            # done_idxs = done_idxs[:200]
-            # num_samples = done_idxs[-1]+1
-            # obss = np.array(dataset['observations'][:num_samples])
-            # terminals = np.array(dataset['terminals'][:num_samples])
-            # actions = np.array(dataset['actions'][:num_samples])
-            # rewards = np.array(dataset['rewards'][:num_samples])
+            done_idxs = done_idxs[:200]
+            num_samples = done_idxs[-1]+1 #len(dataset['observations'])
+            obss = dataset['observations'][:num_samples]
+            terminals = dataset['terminals'][:num_samples]
+            actions = dataset['actions'][:num_samples]
+            rewards = dataset['rewards'][:num_samples]
             print(f"Number of trajectories: {len(done_idxs)}")
 
             # -- get trajectories
             start_index = 0
-            traj_lens, returns = [], []
-            trajectories = [{} for _ in range(len(done_idxs))]
+            traj_lens, returns =  [], []
+            trajectories = []
             for idx, i in enumerate(done_idxs):
-                trajectories[idx]['observations'] = obss[start_index:i+1].reshape(-1, self.state_dim)
-                trajectories[idx]['actions'] = np.eye(self.act_dim)[actions[start_index:i+1].reshape(-1)]
-                trajectories[idx]['rewards'] = rewards[start_index:i+1].reshape(-1, 1)
-                trajectories[idx]['terminals'] = terminals[start_index:i+1]
+                trajectories.append({
+                    'observations': obss[start_index:i+1],
+                    'actions': np.eye(self.act_dim)[actions[start_index:i+1]],
+                    'rewards': rewards[start_index:i+1],
+                    'terminals': terminals[start_index:i+1]
+                })
                 traj_lens.append(i+1-start_index)
-                returns.append(trajectories[idx]['rewards'].sum())
+                returns.append(sum(trajectories[-1]['rewards']))
                 start_index = i+1  
             traj_lens, returns = np.array(traj_lens), np.array(returns)
 
@@ -488,8 +485,10 @@ class Experiment:
             def make_env_fn():
                 if self.variant["atari"]:
                     env_info = env_name.split('-')
+                    game = env_info[0].capitalize()
+                    sticky_action = env_info[-1][-1] == 0
                     env = AtariEnv(env_info[0].capitalize(), stack=True, 
-                        sticky_action=(env_info[-1][-1]==0))
+                        sticky_action=sticky_action, seed = seed)
                 else:
                     import d4rl
                     env = gym.make(env_name)
@@ -500,8 +499,8 @@ class Experiment:
                         env.env.seed(seed)
                     else:
                         pass
-                    env.action_space.seed(seed)
-                    env.observation_space.seed(seed)
+                env.action_space.seed(seed)
+                env.observation_space.seed(seed)
 
                 if target_goal:
                     env.set_target_goal(target_goal)

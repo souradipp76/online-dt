@@ -21,7 +21,7 @@ def create_vec_eval_episodes_fn(
     device,
     use_mean=False,
     reward_scale=0.001,
-    atari=True,
+    atari=False
 ):
     def eval_episodes_fn(model):
         target_return = [eval_rtg * reward_scale] * vec_env.num_envs
@@ -38,7 +38,7 @@ def create_vec_eval_episodes_fn(
             state_std=state_std,
             device=device,
             use_mean=use_mean,
-            atari=atari,
+            atari=atari
         )
         suffix = "_gm" if use_mean else ""
         return {
@@ -65,7 +65,7 @@ def vec_evaluate_episode_rtg(
     device="cuda",
     mode="normal",
     use_mean=False,
-    atari=True,
+    atari=False
 ):
     assert len(target_return) == vec_env.num_envs
 
@@ -140,8 +140,8 @@ def vec_evaluate_episode_rtg(
         action = action.clamp(*model.action_range)
 
         if atari:
-            act = torch.argmax(action, axis=-1)
-            state, reward, done, _ = vec_env.step(act.detach().cpu().numpy())
+            d_action = torch.argmax(action, axis=-1)
+            state, reward, done, _ = vec_env.step(d_action.detach().cpu().numpy())
         else:    
             state, reward, done, _ = vec_env.step(action.detach().cpu().numpy())
 
