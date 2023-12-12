@@ -148,10 +148,10 @@ class Experiment:
                 torch.save(to_save, f)
             print(f"Model saved at {path_prefix}/pretrain_model.pt")
 
-    def _load_model(self, path_prefix, model_file):
+    def _load_model(self, path_prefix, model_file, device):
         if Path(f"{path_prefix}/{model_file}").exists():
             with open(f"{path_prefix}/{model_file}", "rb") as f:
-                checkpoint = torch.load(f)
+                checkpoint = torch.load(f, map_location=torch.device(device))
             self.model.load_state_dict(checkpoint["model_state_dict"])
             self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
             self.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
@@ -163,7 +163,8 @@ class Experiment:
             self.total_transitions_sampled = checkpoint["total_transitions_sampled"]
             np.random.set_state(checkpoint["np"])
             random.setstate(checkpoint["python"])
-            torch.set_rng_state(checkpoint["pytorch"])
+            # print(checkpoint["pytorch"].cpu().type())
+            torch.set_rng_state(checkpoint["pytorch"].cpu())
             print(f"Model loaded at {path_prefix}/model.pt")
 
     def _load_dataset(self, env_name, dataset_path_prefix, atari = False):
@@ -309,6 +310,9 @@ class Experiment:
             )
         ]
 
+        if self.variant["ckpt_path_prefix"]:
+            self._load_model(self.variant["ckpt_path_prefix"], self.variant["model_ckpt"], self.device)
+
         trainer = SequenceTrainer(
             model=self.model,
             optimizer=self.optimizer,
@@ -374,7 +378,7 @@ class Experiment:
         print("\n\n\n*** Online Finetuning ***")
 
         if self.variant["ckpt_path_prefix"]:
-            self._load_model(self.variant["ckpt_path_prefix"], self.variant["model_ckpt"])
+            self._load_model(self.variant["ckpt_path_prefix"], self.variant["model_ckpt"], self.device)
 
         trainer = SequenceTrainer(
             model=self.model,
@@ -622,8 +626,8 @@ if __name__ == "__main__":
     parser.add_argument("--num_updates_per_pretrain_iter", type=int, default=5000)
 
     # finetuning options
-    parser.add_argument("--model_ckpt", type=str, default="pretrain_model.pt")
-    parser.add_argument("--ckpt_path_prefix", type=str, default=".")
+    parser.add_argument("--model_ckpt", type=str, default=None)
+    parser.add_argument("--ckpt_path_prefix", type=str, default=None)
     parser.add_argument("--max_online_iters", type=int, default=1500)
     parser.add_argument("--online_rtg", type=int, default=7200)
     parser.add_argument("--num_online_rollouts", type=int, default=1)
@@ -635,6 +639,7 @@ if __name__ == "__main__":
     parser.add_argument("--device", type=str, default="cuda")
     # parser.add_argument("--log_to_tb", "-w", type=bool, default=False)
     parser.add_argument("--log_to_wandb", "-w", type=bool, default=False)
+    parser.add_argument("--run_id", type=str, default=None)
     parser.add_argument("--save_dir", type=str, default="./exp")
     parser.add_argument("--exp_name", type=str, default="default")
 

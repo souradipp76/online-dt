@@ -24,13 +24,24 @@ class Logger:
         group_name = f'{exp_prefix}-{env_name}'
         exp_name = f'{group_name}-{random.randint(int(1e5), int(1e6) - 1)}'
 
+        run_id = variant["run_id"]
         if self.log_to_wandb:
-            wandb.init(
-                name=exp_name,
-                group=group_name,
-                project='online-dt',
-                config=variant
-            )
+            if run_id is not None:
+                wandb.init(
+                    name=exp_name,
+                    group=group_name,
+                    project='online-dt',
+                    config=variant,
+                    resume="must",
+                    id=run_id
+                )
+            else:
+                wandb.init(
+                    name=exp_name,
+                    group=group_name,
+                    project='online-dt',
+                    config=variant
+                )
 
     def log_metrics(self, outputs, iter_num, total_transitions_sampled, writer):
         print("=" * 80)
@@ -48,6 +59,9 @@ class Logger:
 
         if self.log_to_wandb:
             log_dict = {}
+            wandb.define_metric("training/iteration")
+            wandb.define_metric("training/*", step_metric="training/iteration")
+            log_dict["training/iteration"] = iter_num
             for k, v in outputs.items():
                 log_dict[k] = v
                 if k == "evaluation/return_mean_gm":
