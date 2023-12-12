@@ -21,6 +21,7 @@ def create_vec_eval_episodes_fn(
     device,
     use_mean=False,
     reward_scale=0.001,
+    atari=False
 ):
     def eval_episodes_fn(model):
         target_return = [eval_rtg * reward_scale] * vec_env.num_envs
@@ -37,6 +38,7 @@ def create_vec_eval_episodes_fn(
             state_std=state_std,
             device=device,
             use_mean=use_mean,
+            atari=atari
         )
         suffix = "_gm" if use_mean else ""
         return {
@@ -63,6 +65,7 @@ def vec_evaluate_episode_rtg(
     device="cuda",
     mode="normal",
     use_mean=False,
+    atari=False
 ):
     assert len(target_return) == vec_env.num_envs
 
@@ -73,6 +76,7 @@ def vec_evaluate_episode_rtg(
     state_std = torch.from_numpy(state_std).to(device=device)
 
     num_envs = vec_env.num_envs
+    
     state = vec_env.reset()
 
     # we keep all the histories on the device
@@ -82,6 +86,7 @@ def vec_evaluate_episode_rtg(
         .reshape(num_envs, state_dim)
         .to(device=device, dtype=torch.float32)
     ).reshape(num_envs, -1, state_dim)
+
     actions = torch.zeros(0, device=device, dtype=torch.float32)
     rewards = torch.zeros(0, device=device, dtype=torch.float32)
 
@@ -133,8 +138,12 @@ def vec_evaluate_episode_rtg(
         if use_mean:
             action = action_dist.mean.reshape(num_envs, -1, act_dim)[:, -1]
         action = action.clamp(*model.action_range)
-
-        state, reward, done, _ = vec_env.step(action.detach().cpu().numpy())
+        
+        if atari:
+            d_action = torch.argmax(action, axis=-1)
+            state, reward, done, _ = vec_env.step(d_action.detach().cpu().numpy())
+        else:    
+            state, reward, done, _ = vec_env.step(action.detach().cpu().numpy())
 
         # eval_env.step() will execute the action for all the sub-envs, for those where
         # the episodes have terminated, the envs will be reset. Hence we use

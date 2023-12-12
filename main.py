@@ -5,20 +5,28 @@ This source code is licensed under the CC BY-NC license found in the
 LICENSE.md file in the root directory of this source tree.
 """
 
-from torch.utils.tensorboard import SummaryWriter
+# from torch.utils.tensorboard import SummaryWriter
+
 import argparse
 import pickle
 import random
 import time
 import gym
-import d4rl
 import torch
 import numpy as np
+import wandb
+
+import atari_py
+from collections import deque
+import cv2
 
 import utils
 from replay_buffer import ReplayBuffer
 from lamb import Lamb
-from stable_baselines3.common.vec_env import SubprocVecEnv
+from stable_baselines3.common.vec_env import DummyVecEnv
+from stable_baselines3.common.atari_wrappers import AtariWrapper, WarpFrame
+from gym.wrappers import AtariPreprocessing, TransformReward, FrameStack, frame_stack
+from stable_baselines3.common.env_checker import check_env
 from pathlib import Path
 from data import create_dataloader
 from decision_transformer.models.decision_transformer import DecisionTransformer
@@ -34,7 +42,7 @@ class Experiment:
 
         self.state_dim, self.act_dim, self.action_range = self._get_env_spec(variant)
         self.offline_trajs, self.state_mean, self.state_std = self._load_dataset(
-            variant["env"]
+            variant["env"], variant["dataset_path_prefix"], variant["atari"]
         )
         # initialize by offline trajs
         self.replay_buffer = ReplayBuffer(variant["replay_size"], self.offline_trajs)
@@ -56,12 +64,14 @@ class Experiment:
             n_inner=4 * variant["embed_dim"],
             activation_function=variant["activation_function"],
             n_positions=1024,
+            n_ctx=1024,
             resid_pdrop=variant["dropout"],
             attn_pdrop=variant["dropout"],
             stochastic_policy=True,
             ordering=variant["ordering"],
             init_temperature=variant["init_temperature"],
             target_entropy=self.target_entropy,
+            atari=variant["atari"],
         ).to(device=self.device)
 
         self.optimizer = Lamb(
@@ -86,18 +96,32 @@ class Experiment:
         self.online_iter = 0
         self.total_transitions_sampled = 0
         self.variant = variant
-        self.reward_scale = 1.0 if "antmaze" in variant["env"] else 0.001
+        self.reward_scale = 1.0 if ("antmaze" in variant["env"]) or variant["atari"] else 0.001
         self.logger = Logger(variant)
 
     def _get_env_spec(self, variant):
-        env = gym.make(variant["env"])
-        state_dim = env.observation_space.shape[0]
-        act_dim = env.action_space.shape[0]
-        action_range = [
-            float(env.action_space.low.min()) + 1e-6,
-            float(env.action_space.high.max()) - 1e-6,
-        ]
-        env.close()
+        if variant["atari"]:
+            import d4rl_atari
+            env = gym.make(variant["env"], stack = True)
+            state_dim = 4*84*84
+            print(env.observation_space.shape)
+            print(env.action_space, env.action_space.n)
+            act_dim = env.action_space.n
+            action_range = [
+                1e-6,
+                1 - 1e-6,
+            ]
+            env.close()
+        else:
+            import d4rl
+            env = gym.make(variant["env"])
+            state_dim = env.observation_space.shape[0]
+            act_dim = env.action_space.shape[0]
+            action_range = [
+                float(env.action_space.low.min()) + 1e-6,
+                float(env.action_space.high.max()) - 1e-6,
+            ]
+            env.close()
         return state_dim, act_dim, action_range
 
     def _save_model(self, path_prefix, is_pretrain_model=False):
@@ -124,10 +148,10 @@ class Experiment:
                 torch.save(to_save, f)
             print(f"Model saved at {path_prefix}/pretrain_model.pt")
 
-    def _load_model(self, path_prefix):
-        if Path(f"{path_prefix}/model.pt").exists():
-            with open(f"{path_prefix}/model.pt", "rb") as f:
-                checkpoint = torch.load(f)
+    def _load_model(self, path_prefix, model_file, device):
+        if Path(f"{path_prefix}/{model_file}").exists():
+            with open(f"{path_prefix}/{model_file}", "rb") as f:
+                checkpoint = torch.load(f, map_location=torch.device(device))
             self.model.load_state_dict(checkpoint["model_state_dict"])
             self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
             self.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
@@ -139,26 +163,73 @@ class Experiment:
             self.total_transitions_sampled = checkpoint["total_transitions_sampled"]
             np.random.set_state(checkpoint["np"])
             random.setstate(checkpoint["python"])
-            torch.set_rng_state(checkpoint["pytorch"])
+            # print(checkpoint["pytorch"].cpu().type())
+            torch.set_rng_state(checkpoint["pytorch"].cpu())
             print(f"Model loaded at {path_prefix}/model.pt")
 
-    def _load_dataset(self, env_name):
+    def _load_dataset(self, env_name, dataset_path_prefix, atari = False):
+        
+        if atari:
+            import d4rl_atari
+            import gym
 
-        dataset_path = f"./data/{env_name}.pkl"
-        with open(dataset_path, "rb") as f:
-            trajectories = pickle.load(f)
+            env = gym.make(env_name, stack = True) # -v{0, 1, 2, 3, 4} for datasets with the other random seeds
 
-        states, traj_lens, returns = [], [], []
-        for path in trajectories:
-            states.append(path["observations"])
-            traj_lens.append(len(path["observations"]))
-            returns.append(path["rewards"].sum())
-        traj_lens, returns = np.array(traj_lens), np.array(returns)
+            # dataset will be automatically downloaded into ~/.d4rl/datasets/[GAME]/[INDEX]/[EPOCH]
+            dataset = env.get_dataset()
+            print(len(dataset['observations']))
+            print(dataset['observations'][0].shape)
 
-        # used for input normalization
-        states = np.concatenate(states, axis=0)
-        state_mean, state_std = np.mean(states, axis=0), np.std(states, axis=0) + 1e-6
-        num_timesteps = sum(traj_lens)
+            done_idxs = []
+            terminals = dataset['terminals']
+            for i, flag in enumerate(terminals):
+                if flag == True:
+                    done_idxs.append(i)
+
+            # done_idxs = done_idxs[:20]
+            num_samples = len(dataset['observations'])
+            obss = dataset['observations'][:num_samples]
+            terminals = dataset['terminals'][:num_samples]
+            actions = dataset['actions'][:num_samples]
+            rewards = dataset['rewards'][:num_samples]
+            print(f"Number of trajectories: {len(done_idxs)}")
+
+            # -- get trajectories
+            start_index = 0
+            traj_lens, returns =  [], []
+            trajectories = []
+            for idx, i in enumerate(done_idxs):
+                trajectories.append({
+                    'observations': obss[start_index:i+1],
+                    'actions': np.eye(self.act_dim)[actions[start_index:i+1]],
+                    'rewards': rewards[start_index:i+1],
+                    'terminals': terminals[start_index:i+1]
+                })
+                traj_lens.append(i+1-start_index)
+                returns.append(sum(trajectories[-1]['rewards']))
+                start_index = i+1  
+            traj_lens, returns = np.array(traj_lens), np.array(returns)
+
+            # used for input normalization
+            state_mean, state_std = np.zeros(self.state_dim), 255.*np.ones(self.state_dim)
+            num_timesteps = sum(traj_lens)
+
+        else:
+            dataset_path = f"{dataset_path_prefix}/{env_name}.pkl"
+            with open(dataset_path, "rb") as f:
+                trajectories = pickle.load(f)
+
+            states, traj_lens, returns = [], [], []
+            for path in trajectories:
+                states.append(path["observations"])
+                traj_lens.append(len(path["observations"]))
+                returns.append(path["rewards"].sum())
+            traj_lens, returns = np.array(traj_lens), np.array(returns)
+
+            # used for input normalization
+            states = np.concatenate(states, axis=0)
+            state_mean, state_std = np.mean(states, axis=0), np.std(states, axis=0) + 1e-6
+            num_timesteps = sum(traj_lens)
 
         print("=" * 50)
         print(f"Starting new experiment: {env_name}")
@@ -209,6 +280,7 @@ class Experiment:
                 state_std=self.state_std,
                 device=self.device,
                 use_mean=False,
+                atari=self.variant["atari"],
             )
 
         self.replay_buffer.add_new_trajs(trajs)
@@ -234,8 +306,12 @@ class Experiment:
                 device=self.device,
                 use_mean=True,
                 reward_scale=self.reward_scale,
+                atari=self.variant["atari"],
             )
         ]
+
+        if self.variant["ckpt_path_prefix"]:
+            self._load_model(self.variant["ckpt_path_prefix"], self.variant["model_ckpt"], self.device)
 
         trainer = SequenceTrainer(
             model=self.model,
@@ -245,9 +321,9 @@ class Experiment:
             device=self.device,
         )
 
-        writer = (
-            SummaryWriter(self.logger.log_path) if self.variant["log_to_tb"] else None
-        )
+        # writer = (
+        #     SummaryWriter(self.logger.log_path) if self.variant["log_to_tb"] else None
+        # )
         while self.pretrain_iter < self.variant["max_pretrain_iters"]:
             # in every iteration, prepare the data loader
             dataloader = create_dataloader(
@@ -275,7 +351,7 @@ class Experiment:
                 outputs,
                 iter_num=self.pretrain_iter,
                 total_transitions_sampled=self.total_transitions_sampled,
-                writer=writer,
+                writer=None,
             )
 
             self._save_model(
@@ -301,6 +377,9 @@ class Experiment:
 
         print("\n\n\n*** Online Finetuning ***")
 
+        if self.variant["ckpt_path_prefix"]:
+            self._load_model(self.variant["ckpt_path_prefix"], self.variant["model_ckpt"], self.device)
+
         trainer = SequenceTrainer(
             model=self.model,
             optimizer=self.optimizer,
@@ -319,11 +398,12 @@ class Experiment:
                 device=self.device,
                 use_mean=True,
                 reward_scale=self.reward_scale,
+                atari=self.variant["atari"],
             )
         ]
-        writer = (
-            SummaryWriter(self.logger.log_path) if self.variant["log_to_tb"] else None
-        )
+        # writer = (
+        #     SummaryWriter(self.logger.log_path) if self.variant["log_to_tb"] else None
+        # )
         while self.online_iter < self.variant["max_online_iters"]:
 
             outputs = {}
@@ -373,7 +453,7 @@ class Experiment:
                 outputs,
                 iter_num=self.pretrain_iter + self.online_iter,
                 total_transitions_sampled=self.total_transitions_sampled,
-                writer=writer,
+                writer=None,
             )
 
             self._save_model(
@@ -386,8 +466,6 @@ class Experiment:
     def __call__(self):
 
         utils.set_seed_everywhere(args.seed)
-
-        import d4rl
 
         def loss_fn(
             a_hat_dist,
@@ -408,17 +486,24 @@ class Experiment:
             )
 
         def get_env_builder(seed, env_name, target_goal=None):
-            def make_env_fn():
-                import d4rl
 
-                env = gym.make(env_name)
-                env.seed(seed)
-                if hasattr(env.env, "wrapped_env"):
-                    env.env.wrapped_env.seed(seed)
-                elif hasattr(env.env, "seed"):
-                    env.env.seed(seed)
+            def make_env_fn():
+                if self.variant["atari"]:
+                    env_info = env_name.split('-')
+                    game = env_info[0].capitalize()
+                    sticky_action = env_info[-1][-1] == 0
+                    env = AtariEnv(env_info[0].capitalize(), stack=True, 
+                        sticky_action=sticky_action, seed = seed)
                 else:
-                    pass
+                    import d4rl
+                    env = gym.make(env_name)
+                    env.seed(seed)
+                    if hasattr(env.env, "wrapped_env"):
+                        env.env.wrapped_env.seed(seed)
+                    elif hasattr(env.env, "seed"):
+                        env.env.seed(seed)
+                    else:
+                        pass
                 env.action_space.seed(seed)
                 env.observation_space.seed(seed)
 
@@ -428,7 +513,7 @@ class Experiment:
                 return env
 
             return make_env_fn
-
+        
         print("\n\nMaking Eval Env.....")
         env_name = self.variant["env"]
         if "antmaze" in env_name:
@@ -438,7 +523,7 @@ class Experiment:
             print(f"Generated the fixed target goal: {target_goal}")
         else:
             target_goal = None
-        eval_envs = SubprocVecEnv(
+        eval_envs = DummyVecEnv(
             [
                 get_env_builder(i, env_name=env_name, target_goal=target_goal)
                 for i in range(self.variant["num_eval_episodes"])
@@ -451,7 +536,7 @@ class Experiment:
 
         if self.variant["max_online_iters"]:
             print("\n\nMaking Online Env.....")
-            online_envs = SubprocVecEnv(
+            online_envs = DummyVecEnv(
                 [
                     get_env_builder(i + 100, env_name=env_name, target_goal=target_goal)
                     for i in range(self.variant["num_online_rollouts"])
@@ -463,11 +548,57 @@ class Experiment:
         eval_envs.close()
 
 
+class AtariEnv(gym.Env):
+    def __init__(self, game,
+                 stack=False,
+                 sticky_action=False,
+                 clip_reward=False,
+                 terminal_on_life_loss=False,
+                 **kwargs):
+        # set action_probability=0.25 if sticky_action=True
+        env_id = '{}NoFrameskip-v{}'.format(game, 0 if sticky_action else 4)
+
+        # use official atari wrapper
+        params = {}
+        if "render_mode" in kwargs:
+            params["render_mode"] = kwargs["render_mode"]
+        env = AtariPreprocessing(gym.make(env_id, **params),
+                    terminal_on_life_loss=terminal_on_life_loss)
+
+        if stack:
+            env = FrameStack(env, num_stack=4)
+
+        if clip_reward:
+            env = TransformReward(env, lambda r: np.clip(r, -1.0, 1.0))
+
+        self._env = env
+
+        self.observation_space = env.observation_space
+        self.action_space = env.action_space
+
+    def step(self, action):
+        step_output = self._env.step(action)
+        return step_output[0], step_output[1], step_output[2], step_output[4]
+
+    def reset(self, *args, **kwargs):
+        return self._env.reset(*args, **kwargs)[0]
+
+    def render(self, *args, **kwargs):
+        return self._env.render(*args, **kwargs)
+
+    @property
+    def render_mode(self):
+        return self._env.render_mode
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=10)
     parser.add_argument("--env", type=str, default="hopper-medium-v2")
+    parser.add_argument("--atari", type=bool, default=False)
 
+    # dataset options
+    parser.add_argument("--dataset_path_prefix", type=str, default="./data")
+    
     # model options
     parser.add_argument("--K", type=int, default=20)
     parser.add_argument("--embed_dim", type=int, default=512)
@@ -495,6 +626,8 @@ if __name__ == "__main__":
     parser.add_argument("--num_updates_per_pretrain_iter", type=int, default=5000)
 
     # finetuning options
+    parser.add_argument("--model_ckpt", type=str, default=None)
+    parser.add_argument("--ckpt_path_prefix", type=str, default=None)
     parser.add_argument("--max_online_iters", type=int, default=1500)
     parser.add_argument("--online_rtg", type=int, default=7200)
     parser.add_argument("--num_online_rollouts", type=int, default=1)
@@ -504,7 +637,9 @@ if __name__ == "__main__":
 
     # environment options
     parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--log_to_tb", "-w", type=bool, default=True)
+    # parser.add_argument("--log_to_tb", "-w", type=bool, default=False)
+    parser.add_argument("--log_to_wandb", "-w", type=bool, default=False)
+    parser.add_argument("--run_id", type=str, default=None)
     parser.add_argument("--save_dir", type=str, default="./exp")
     parser.add_argument("--exp_name", type=str, default="default")
 

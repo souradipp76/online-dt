@@ -144,10 +144,11 @@ class DecisionTransformer(TrajectoryModel):
         stochastic_policy=False,
         init_temperature=0.1,
         target_entropy=None,
+        atari=False,
         **kwargs
     ):
         super().__init__(state_dim, act_dim, max_length=max_length)
-
+        self.atari = atari
         self.hidden_size = hidden_size
         config = transformers.GPT2Config(
             vocab_size=1,  # doesn't matter -- we don't use the vocab
@@ -163,7 +164,15 @@ class DecisionTransformer(TrajectoryModel):
         if ordering:
             self.embed_ordering = nn.Embedding(max_ep_len, hidden_size)
         self.embed_return = torch.nn.Linear(1, hidden_size)
-        self.embed_state = torch.nn.Linear(self.state_dim, hidden_size)
+
+        if self.atari:
+            self.embed_state = nn.Sequential(nn.Conv2d(4, 32, 8, stride=4, padding=0), nn.ReLU(),
+                                 nn.Conv2d(32, 64, 4, stride=2, padding=0), nn.ReLU(),
+                                 nn.Conv2d(64, 64, 3, stride=1, padding=0), nn.ReLU(),
+                                 nn.Flatten(), nn.Linear(3136, hidden_size), nn.Tanh())
+        else:
+            self.embed_state = torch.nn.Linear(self.state_dim, hidden_size)
+
         self.embed_action = torch.nn.Linear(self.act_dim, hidden_size)
 
         self.embed_ln = nn.LayerNorm(hidden_size)
@@ -205,8 +214,9 @@ class DecisionTransformer(TrajectoryModel):
         ordering,
         padding_mask=None,
     ):
-
         batch_size, seq_length = states.shape[0], states.shape[1]
+        if self.atari:
+            states = states.reshape(-1, 4, 84, 84).type(torch.float32).contiguous()
 
         if padding_mask is None:
             # attention mask for GPT: 1 if can be attended to, 0 if not
@@ -216,6 +226,9 @@ class DecisionTransformer(TrajectoryModel):
         state_embeddings = self.embed_state(states)
         action_embeddings = self.embed_action(actions)
         returns_embeddings = self.embed_return(returns_to_go)
+
+        if self.atari:
+            state_embeddings = state_embeddings.reshape(batch_size, seq_length, self.hidden_size)
 
         if self.ordering:
             order_embeddings = self.embed_ordering(timesteps)
