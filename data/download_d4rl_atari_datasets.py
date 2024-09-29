@@ -5,12 +5,11 @@ This source code is licensed under the CC BY-NC license found in the
 LICENSE.md file in the root directory of this source tree.
 """
 
-import gym
 import numpy as np
 import collections
 import pickle
+import gym
 import d4rl_atari
-
 
 datasets = []
 
@@ -22,7 +21,7 @@ for env_name in ["breakout", "qbert", "pong"]:
 
         N = dataset["rewards"].shape[0]
         data_ = collections.defaultdict(list)
-
+        n = env.action_space.n
 
         episode_step = 0
         paths = []
@@ -41,6 +40,8 @@ for env_name in ["breakout", "qbert", "pong"]:
                 episode_data = {}
                 for k in data_:
                     episode_data[k] = np.array(data_[k])
+                    if k == 'actions':
+                        episode_data[k] = np.eye(n)[np.array(data_[k])]
                 paths.append(episode_data)
                 data_ = collections.defaultdict(list)
             episode_step += 1

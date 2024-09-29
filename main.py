@@ -186,7 +186,6 @@ class Experiment:
                 if flag:
                     end_idxs.append(i)
 
-            num_samples = len(dataset['observations'])
             obss = dataset['observations']
             terminals = dataset['terminals']
             actions = dataset['actions']

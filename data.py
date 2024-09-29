@@ -69,7 +69,7 @@ class TransformSamplingSubTraj:
         self.action_range = action_range
 
     def __call__(self, traj):
-        si = random.randint(0, np.array(traj["rewards"]).shape[0] - 1)
+        si = random.randint(0, traj["rewards"].shape[0] - 1)
 
         # get sequences from dataset
         ss = traj["observations"][si : si + self.max_len].reshape(-1, self.state_dim)
@@ -137,7 +137,7 @@ def create_dataloader(
     state_std,
     reward_scale,
     action_range,
-    num_workers=2,
+    num_workers=24,
 ):
     # total number of subt-rajectories you need to sample
     sample_size = batch_size * num_iters
