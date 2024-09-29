@@ -180,38 +180,40 @@ class Experiment:
             print(len(dataset['observations']))
             print(dataset['observations'][0].shape)
 
-            done_idxs = []
+            end_idxs = []
             terminals = dataset['terminals']
             for i, flag in enumerate(terminals):
-                if flag == True:
-                    done_idxs.append(i)
+                if flag:
+                    end_idxs.append(i)
 
-            # done_idxs = done_idxs[:20]
             num_samples = len(dataset['observations'])
-            obss = dataset['observations'][:num_samples]
-            terminals = dataset['terminals'][:num_samples]
-            actions = dataset['actions'][:num_samples]
-            rewards = dataset['rewards'][:num_samples]
-            print(f"Number of trajectories: {len(done_idxs)}")
+            obss = dataset['observations']
+            terminals = dataset['terminals']
+            actions = dataset['actions']
+            rewards = dataset['rewards']
+            print(f"Number of trajectories: {len(end_idxs)}")
 
-            # -- get trajectories
-            start_index = 0
-            traj_lens, returns =  [], []
+            # get trajectories
+            start_idx = 0
+            states, traj_lens, returns =  [], []
             trajectories = []
-            for idx, i in enumerate(done_idxs):
-                trajectories.append({
-                    'observations': obss[start_index:i+1],
-                    'actions': np.eye(self.act_dim)[actions[start_index:i+1]],
-                    'rewards': rewards[start_index:i+1],
-                    'terminals': terminals[start_index:i+1]
-                })
-                traj_lens.append(i+1-start_index)
-                returns.append(sum(trajectories[-1]['rewards']))
-                start_index = i+1  
+            for end_idx in end_idxs:
+                path = {
+                    'observations': obss[start_idx:end_idx + 1],
+                    'actions': np.eye(self.act_dim)[actions[start_idx:end_idx + 1]],
+                    'rewards': rewards[start_idx:end_idx + 1],
+                    'terminals': terminals[start_idx:end_idx+1]
+                }
+                states.append(path["observations"])
+                traj_lens.append(len(path["observations"]))
+                returns.append(path["rewards"].sum())
+
+                trajectories.append(path)
+                start_idx = end_idx + 1  
             traj_lens, returns = np.array(traj_lens), np.array(returns)
 
             # used for input normalization
-            state_mean, state_std = np.zeros(self.state_dim), 255.*np.ones(self.state_dim)
+            state_mean, state_std = np.mean(states, axis=0), np.std(states, axis=0) + 1e-6
             num_timesteps = sum(traj_lens)
 
         else:

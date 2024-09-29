@@ -71,14 +71,14 @@ class TransformSamplingSubTraj:
     def __call__(self, traj):
         si = random.randint(0, np.array(traj["rewards"]).shape[0] - 1)
 
-        # get sequences from dataset   
-        ss = np.array(traj["observations"][si : si + self.max_len]).reshape(-1, self.state_dim)
-        aa = np.array(traj["actions"][si : si + self.max_len]).reshape(-1, self.act_dim)
-        rr = np.array(traj["rewards"][si : si + self.max_len]).reshape(-1, 1)
+        # get sequences from dataset
+        ss = traj["observations"][si : si + self.max_len].reshape(-1, self.state_dim)
+        aa = traj["actions"][si : si + self.max_len].reshape(-1, self.act_dim)
+        rr = traj["rewards"][si : si + self.max_len].reshape(-1, 1)
         if "terminals" in traj:
-            dd = np.array(traj["terminals"][si : si + self.max_len])  # .reshape(-1)
+            dd = traj["terminals"][si : si + self.max_len]  # .reshape(-1)
         else:
-            dd = np.array(traj["dones"][si : si + self.max_len])  # .reshape(-1)
+            dd = traj["dones"][si : si + self.max_len]  # .reshape(-1)
 
         # get the total length of a trajectory
         tlen = ss.shape[0]
