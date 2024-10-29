@@ -214,6 +214,7 @@ class DecisionTransformer(TrajectoryModel):
         ordering,
         padding_mask=None,
     ):
+
         batch_size, seq_length = states.shape[0], states.shape[1]
         if self.env_type == "atari":
             states = states.reshape(-1, 4, 84, 84).type(torch.float32).contiguous()

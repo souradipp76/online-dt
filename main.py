@@ -161,9 +161,9 @@ class Experiment:
             self.total_transitions_sampled = checkpoint["total_transitions_sampled"]
             np.random.set_state(checkpoint["np"])
             random.setstate(checkpoint["python"])
-            # print(checkpoint["pytorch"].cpu().type())
-            torch.set_rng_state(checkpoint["pytorch"].cpu())
-            print(f"Model loaded at {path_prefix}/model.pt")
+            # torch.set_rng_state(checkpoint["pytorch"])
+            torch.manual_seed(checkpoint["pytorch"])
+            print(f"Model loaded at {path_prefix}/{model_file}")
 
     def _load_dataset(self, env_name, dataset_path_prefix):
         dataset_path = f"{dataset_path_prefix}/{env_name}.pkl"
@@ -302,7 +302,7 @@ class Experiment:
                 outputs,
                 iter_num=self.pretrain_iter,
                 total_transitions_sampled=self.total_transitions_sampled,
-                writer=None,
+                writer=writer,
             )
 
             self._save_model(
@@ -404,7 +404,7 @@ class Experiment:
                 outputs,
                 iter_num=self.pretrain_iter + self.online_iter,
                 total_transitions_sampled=self.total_transitions_sampled,
-                writer=None,
+                writer=writer,
             )
 
             self._save_model(
@@ -437,7 +437,6 @@ class Experiment:
             )
 
         def get_env_builder(seed, env_name, target_goal=None):
-
             def make_env_fn():
                 if self.variant["env_type"] == "atari":
                     import d4rl_atari
@@ -463,7 +462,7 @@ class Experiment:
                 return env
 
             return make_env_fn
-        
+
         print("\n\nMaking Eval Env.....")
         env_name = self.variant["env"]
         if "antmaze" in env_name:

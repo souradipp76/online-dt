@@ -76,7 +76,6 @@ def vec_evaluate_episode_rtg(
     state_std = torch.from_numpy(state_std).to(device=device)
 
     num_envs = vec_env.num_envs
-    
     state = vec_env.reset()
 
     # we keep all the histories on the device
@@ -86,7 +85,6 @@ def vec_evaluate_episode_rtg(
         .reshape(num_envs, state_dim)
         .to(device=device, dtype=torch.float32)
     ).reshape(num_envs, -1, state_dim)
-
     actions = torch.zeros(0, device=device, dtype=torch.float32)
     rewards = torch.zeros(0, device=device, dtype=torch.float32)
 
