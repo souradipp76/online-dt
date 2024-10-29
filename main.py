@@ -93,8 +93,6 @@ class Experiment:
         self.variant = variant
         if "antmaze" in variant["env"] or "atari" in variant["env_type"]:
             self.reward_scale = 1.0
-        elif variant["env"] == 'TB':
-            self.reward_scale = 20.
         else:
             self.reward_scale = 0.001
         self.logger = Logger(variant)
