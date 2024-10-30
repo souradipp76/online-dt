@@ -443,6 +443,12 @@ class Experiment:
                     sticky_action = env_name.split('-')[-1][-1] == 0
                     env = gym.make(env_name, stack=True, 
                         sticky_action=sticky_action, seed = seed)
+                    if hasattr(env.env, "wrapped_env"):
+                        env.env.wrapped_env.seed(seed)
+                    elif hasattr(env.env, "seed"):
+                        env.env.seed(seed)
+                    else:
+                        pass
                 else:
                     import d4rl
                     env = gym.make(env_name)
@@ -543,7 +549,7 @@ if __name__ == "__main__":
 
     # environment options
     parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--log_to_tb", "-w", type=bool, default=False)
+    parser.add_argument("--log_to_tb", "-t", type=bool, default=False)
     parser.add_argument("--log_to_wandb", "-w", type=bool, default=False)
     parser.add_argument("--run_id", type=str, default=None)
     parser.add_argument("--save_dir", type=str, default="./exp")

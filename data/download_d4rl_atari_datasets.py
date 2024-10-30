@@ -14,9 +14,9 @@ import d4rl_atari
 datasets = []
 
 for env_name in ["breakout", "qbert", "pong"]:
-    for dataset_type in ["mixed", "medium", "expert"]:
-        name = f"{env_name}-{dataset_type}-v2"
-        env = gym.make(env_name, stack = True)
+    for dataset_type in ["mixed", "medium"]:
+        name = f"{env_name}-{dataset_type}-v4"
+        env = gym.make(name, stack = True)
         dataset = env.get_dataset()
 
         N = dataset["rewards"].shape[0]
