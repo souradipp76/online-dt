@@ -509,7 +509,7 @@ if __name__ == "__main__":
     parser.add_argument("--env_type", type=str, default="gym")
 
     # dataset options
-    parser.add_argument("--dataset_path_prefix", type=str, default="./data")
+    parser.add_argument("--dataset_path_prefix", type=str, default=".")
     
     # model options
     parser.add_argument("--K", type=int, default=20)

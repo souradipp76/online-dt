@@ -39,7 +39,7 @@ for env_name in ["breakout", "qbert", "pong"]:
                 episode_step = 0
                 episode_data = {}
                 for k in data_:
-                    episode_data[k] = np.array(data_[k])
+                    episode_data[k] = data_[k]
                     if k == 'actions':
                         episode_data[k] = np.eye(n)[np.array(data_[k])]
                 paths.append(episode_data)
@@ -47,7 +47,7 @@ for env_name in ["breakout", "qbert", "pong"]:
             episode_step += 1
 
         returns = np.array([np.sum(p["rewards"]) for p in paths])
-        num_samples = np.sum([p["rewards"].shape[0] for p in paths])
+        num_samples = np.sum([len(p["rewards"]) for p in paths])
         print(f"Number of samples collected: {num_samples}")
         print(
             f"Trajectory returns: mean = {np.mean(returns)}, std = {np.std(returns)}, max = {np.max(returns)}, min = {np.min(returns)}"
