@@ -31,7 +31,7 @@ for env_name in ["breakout", "qbert", "pong"]:
         print(f"Number of paths: {len(done_steps)}")
 
         start_step = 0
-        for done_step in done_steps[:10]:
+        for done_step in done_steps:
             paths.append({
                 "observations" : dataset["observations"][start_step : done_step + 1],
                 "actions" : np.eye(n)[dataset["actions"][start_step : done_step + 1]],
